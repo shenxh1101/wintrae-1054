@@ -650,7 +650,6 @@ class MainWindow:
             archive_path = os.path.join(output_dir, archive_folder_name)
 
             if os.path.exists(archive_path):
-                import shutil
                 shutil.rmtree(archive_path)
             os.makedirs(archive_path, exist_ok=True)
 
@@ -660,64 +659,153 @@ class MainWindow:
 
             report_file = f"{category}_汇总报告.xlsx"
             report_src = os.path.join(output_dir, report_file)
-            if os.path.exists(report_src):
+            if self.report_generated and os.path.exists(report_src):
                 shutil.copy2(report_src, os.path.join(archive_path, report_file))
                 file_list.append({'文件名': report_file, '类型': '汇总报告', '状态': '成功'})
                 success_count += 1
             else:
-                file_list.append({'文件名': report_file, '类型': '汇总报告', '状态': '缺失'})
                 fail_count += 1
 
             reminder_file = f"{category}_下月提醒.xlsx"
             reminder_src = os.path.join(output_dir, reminder_file)
-            if os.path.exists(reminder_src):
+            if self.reminder_generated and os.path.exists(reminder_src):
                 shutil.copy2(reminder_src, os.path.join(archive_path, reminder_file))
                 file_list.append({'文件名': reminder_file, '类型': '下月提醒', '状态': '成功'})
                 success_count += 1
             else:
-                file_list.append({'文件名': reminder_file, '类型': '下月提醒', '状态': '缺失'})
                 fail_count += 1
 
             error_file = f"{category}_异常明细.xlsx"
             error_src = os.path.join(output_dir, error_file)
-            if os.path.exists(error_src):
+            if self.validation_result and self.validation_result.get('错误明细') and os.path.exists(error_src):
                 shutil.copy2(error_src, os.path.join(archive_path, error_file))
                 file_list.append({'文件名': error_file, '类型': '异常明细', '状态': '成功'})
                 success_count += 1
-            else:
-                file_list.append({'文件名': error_file, '类型': '异常明细', '状态': '未生成'})
 
-            village_dir_src = os.path.join(output_dir, '村居分组')
-            village_dir_dst = os.path.join(archive_path, '村居分组')
-            if os.path.exists(village_dir_src):
-                shutil.copytree(village_dir_src, village_dir_dst)
-                village_files = os.listdir(village_dir_src)
-                for vf in village_files:
-                    file_list.append({'文件名': f'村居分组/{vf}', '类型': '村居文件', '状态': '成功'})
-                success_count += len(village_files)
-            else:
-                file_list.append({'文件名': '村居分组/', '类型': '村居分组', '状态': '未生成'})
+            if self.export_result and self.export_result.get('成功') and self.export_result.get('文件列表'):
+                village_dir_dst = os.path.join(archive_path, '村居分组')
+                os.makedirs(village_dir_dst, exist_ok=True)
+                village_count = 0
+                for vf_info in self.export_result['文件列表']:
+                    vf_name = vf_info['文件名']
+                    vf_src = os.path.join(output_dir, '村居分组', vf_name)
+                    if os.path.exists(vf_src):
+                        shutil.copy2(vf_src, os.path.join(village_dir_dst, vf_name))
+                        file_list.append({'文件名': f'村居分组/{vf_name}', '类型': '村居文件', '状态': '成功'})
+                        village_count += 1
+                success_count += village_count
+
+            summary_path = os.path.join(archive_path, '核对摘要.txt')
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write(f"{'=' * 55}\n")
+                f.write(f"           {category} 随访资料核对摘要\n")
+                f.write(f"{'=' * 55}\n\n")
+                f.write(f"归档时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"归档月份: {now.strftime('%Y年%m月')}\n")
+                f.write(f"分类: {category}\n\n")
+
+                f.write(f"【数据导入】\n")
+                f.write(f"  导入文件数: {len(self.file_info_list)} 个\n")
+                if self.current_data is not None:
+                    f.write(f"  记录总数: {len(self.current_data)} 条\n")
+                else:
+                    f.write(f"  记录总数: 0 条\n")
+
+                if self.file_info_list:
+                    for info in self.file_info_list:
+                        if '错误' in info:
+                            f.write(f"    - {info['文件名']}: 读取失败 - {info['错误']}\n")
+                        else:
+                            f.write(f"    - {info['文件名']}: {info['记录数']} 条\n")
+                f.write("\n")
+
+                f.write(f"【数据质量】\n")
+                if self.validation_result:
+                    f.write(f"  数据有效率: {self.validation_result.get('有效率', '0%')}\n")
+                    f.write(f"  有效记录数: {self.validation_result.get('有效记录数', 0)} 条\n")
+                    f.write(f"  无效记录数: {self.validation_result.get('无效记录数', 0)} 条\n")
+                    error_types = self.validation_result.get('错误汇总', {})
+                    if error_types:
+                        f.write(f"  异常类型:\n")
+                        for err_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                            f.write(f"    - {err_type}: {count} 条\n")
+                else:
+                    f.write(f"  未校验\n")
+                f.write("\n")
+
+                f.write(f"【随访统计】\n")
+                if self.overdue_result:
+                    f.write(f"  管理总人数: {self.overdue_result.get('总人数', 0)} 人\n")
+                    f.write(f"  超期未访: {self.overdue_result.get('超期人数', 0)} 人\n")
+                    f.write(f"  超期率: {self.overdue_result.get('超期率', '0%')}\n")
+                else:
+                    f.write(f"  未统计\n")
+                f.write("\n")
+
+                f.write(f"【下月随访】\n")
+                if self.next_month_result:
+                    f.write(f"  待随访人数: {self.next_month_result.get('待随访人数', 0)} 人\n")
+                    village_stats = self.next_month_result.get('村居统计', pd.DataFrame())
+                    if not village_stats.empty:
+                        f.write(f"  村居分布:\n")
+                        for _, row in village_stats.head(10).iterrows():
+                            f.write(f"    - {row['村居']}: {row['人数']} 人\n")
+                        if len(village_stats) > 10:
+                            f.write(f"    ... 共 {len(village_stats)} 个村居\n")
+                else:
+                    f.write(f"  未生成\n")
+                f.write("\n")
+
+                f.write(f"【输出文件】\n")
+                f.write(f"  汇总报告: {'已生成' if self.report_generated else '未生成'}\n")
+                f.write(f"  下月提醒: {'已生成' if self.reminder_generated else '未生成'}\n")
+                if self.validation_result and self.validation_result.get('错误明细'):
+                    error_count = len(self.validation_result['错误明细'])
+                    f.write(f"  异常明细: 已生成 ({error_count} 条)\n")
+                else:
+                    f.write(f"  异常明细: 未生成\n")
+                if self.export_result and self.export_result.get('成功'):
+                    f.write(f"  村居分组: 已生成 ({len(self.export_result['文件列表'])} 个文件)\n")
+                else:
+                    f.write(f"  村居分组: 未生成\n")
+                f.write("\n")
+
+                f.write(f"【归档信息】\n")
+                f.write(f"  归档文件数: {success_count} 个\n")
+                if fail_count > 0:
+                    f.write(f"  缺失文件数: {fail_count} 个\n")
+                f.write(f"  归档路径: {archive_path}\n\n")
+
+                f.write(f"{'=' * 55}\n")
+                f.write(f"  核对人: ______________    核对日期: ______________\n")
+                f.write(f"{'=' * 55}\n")
+
+            file_list.insert(0, {'文件名': '核对摘要.txt', '类型': '摘要文件', '状态': '成功'})
+            success_count += 1
 
             manifest_path = os.path.join(archive_path, '文件清单.txt')
             with open(manifest_path, 'w', encoding='utf-8') as f:
                 f.write(f"{category} 随访资料归档清单\n")
                 f.write(f"归档时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"归档月份: {now.strftime('%Y年%m月')}\n")
-                f.write("=" * 50 + "\n\n")
-                f.write(f"总文件数: {len(file_list)}\n")
-                f.write(f"成功: {success_count} 个\n")
-                f.write(f"异常: {fail_count} 个\n\n")
-                f.write("-" * 50 + "\n")
+                f.write("=" * 55 + "\n\n")
+                f.write(f"总文件数: {success_count} 个\n")
+                if fail_count > 0:
+                    f.write(f"缺失文件: {fail_count} 个\n")
+                f.write("\n")
+                f.write("-" * 55 + "\n")
                 f.write(f"{'序号':<5}{'文件名':<35}{'类型':<12}{'状态':<10}\n")
-                f.write("-" * 50 + "\n")
+                f.write("-" * 55 + "\n")
                 for idx, item in enumerate(file_list, 1):
                     f.write(f"{idx:<5}{item['文件名']:<35}{item['类型']:<12}{item['状态']:<10}\n")
                 f.write("\n")
-                f.write("=" * 50 + "\n")
+                f.write("=" * 55 + "\n")
                 f.write(f"归档路径: {archive_path}\n")
 
             self.archive_generated = True
             self.archive_path = archive_path
+            self.archive_file_count = success_count
+            self.archive_fail_count = fail_count
 
             self._log(f"归档包已生成: {archive_path}")
             self._log(f"  包含文件: {success_count} 个")
@@ -792,35 +880,38 @@ class MainWindow:
         self._log("=" * 50)
         output_dir = self._get_output_dir()
 
-        generated_files = []
-        failed_files = []
+        output_files = []
 
-        if step_results.get('validate') and self.validation_result and self.validation_result.get('错误明细'):
-            generated_files.append(f'{self._get_category()}_异常明细.xlsx')
+        if self.report_generated:
+            output_files.append({'名称': '汇总报告', '文件': f'{self._get_category()}_汇总报告.xlsx', '状态': '已生成', '类型': '主要文件'})
         else:
-            failed_files.append(f'{self._get_category()}_异常明细.xlsx')
+            output_files.append({'名称': '汇总报告', '文件': f'{self._get_category()}_汇总报告.xlsx', '状态': '未生成', '类型': '主要文件'})
 
-        if step_results.get('export') and self.export_result:
-            generated_files.append('村居分组/ (多个文件)')
-            if self.overdue_result and not self.overdue_result.get('超期人员', pd.DataFrame()).empty:
-                generated_files.append('超期待访/ (多个文件)')
+        if self.reminder_generated:
+            output_files.append({'名称': '下月提醒', '文件': f'{self._get_category()}_下月提醒.xlsx', '状态': '已生成', '类型': '主要文件'})
         else:
-            failed_files.append('村居分组/ (多个文件)')
+            output_files.append({'名称': '下月提醒', '文件': f'{self._get_category()}_下月提醒.xlsx', '状态': '未生成', '类型': '主要文件'})
 
-        if step_results.get('report') and self.report_generated:
-            generated_files.append(f'{self._get_category()}_汇总报告.xlsx')
+        if self.validation_result and self.validation_result.get('错误明细'):
+            error_count = len(self.validation_result['错误明细'])
+            output_files.append({'名称': '异常明细', '文件': f'{self._get_category()}_异常明细.xlsx', '状态': f'已生成 ({error_count}条)', '类型': '主要文件'})
         else:
-            failed_files.append(f'{self._get_category()}_汇总报告.xlsx')
+            output_files.append({'名称': '异常明细', '文件': f'{self._get_category()}_异常明细.xlsx', '状态': '未生成', '类型': '主要文件'})
 
-        if step_results.get('report') and self.reminder_generated:
-            generated_files.append(f'{self._get_category()}_下月提醒.xlsx')
+        if self.export_result and self.export_result.get('成功'):
+            village_count = len(self.export_result['文件列表'])
+            output_files.append({'名称': '村居分组', '文件': f'{village_count} 个村居文件', '状态': '已生成', '类型': '分组文件'})
         else:
-            failed_files.append(f'{self._get_category()}_下月提醒.xlsx')
+            output_files.append({'名称': '村居分组', '文件': '-', '状态': '未生成', '类型': '分组文件'})
 
-        if step_results.get('archive') and self.archive_generated:
-            generated_files.append('归档包/ (文件夹)')
+        if self.archive_generated:
+            archive_count = getattr(self, 'archive_file_count', 0)
+            output_files.append({'名称': '归档包', '文件': f'{self._get_category()}_{datetime.now().strftime("%Y%m")}月_归档', '状态': f'已生成 ({archive_count}个文件)', '类型': '归档'})
         else:
-            failed_files.append('归档包/ (文件夹)')
+            output_files.append({'名称': '归档包', '文件': '-', '状态': '未生成', '类型': '归档'})
+
+        main_files = [f for f in output_files if f['类型'] == '主要文件' and f['状态'].startswith('已生成')]
+        group_files = [f for f in output_files if f['类型'] == '分组文件' and f['状态'].startswith('已生成')]
 
         if failed_step:
             self._log(f"执行失败，失败步骤: {failed_step}")
@@ -844,17 +935,15 @@ class MainWindow:
                     status = '○ 未执行'
                 msg_lines.append(f"  {status} - {step_name}")
 
-            if generated_files:
-                msg_lines.append("")
-                msg_lines.append(f"已生成的文件 ({len(generated_files)} 个):")
-                for f in generated_files:
-                    msg_lines.append(f"  ✓ {f}")
+            msg_lines.append("")
+            msg_lines.append("输出文件状态:")
+            for f in output_files:
+                icon = '✓' if f['状态'].startswith('已生成') else '○'
+                msg_lines.append(f"  {icon} {f['名称']}: {f['状态']}")
 
-            if failed_files:
+            if self.archive_generated and self.archive_path:
                 msg_lines.append("")
-                msg_lines.append(f"未生成的文件 ({len(failed_files)} 个):")
-                for f in failed_files:
-                    msg_lines.append(f"  ✗ {f}")
+                msg_lines.append(f"归档包位置: {self.archive_path}")
 
             msg_lines.append("")
             msg_lines.append(f"输出目录: {output_dir}")
@@ -881,21 +970,16 @@ class MainWindow:
                 msg_lines.extend(summary_lines)
                 msg_lines.append("")
 
-            msg_lines.append(f"生成文件数: {len(generated_files)} 个")
-            if self.archive_generated:
+            msg_lines.append("输出文件:")
+            for f in output_files:
+                icon = '✓' if f['状态'].startswith('已生成') else '○'
+                msg_lines.append(f"  {icon} {f['名称']}: {f['状态']}")
+
+            msg_lines.append("")
+            if self.archive_generated and self.archive_path:
                 msg_lines.append(f"归档包位置: {self.archive_path}")
-            msg_lines.append("")
-            msg_lines.append("已生成文件:")
-            for f in generated_files:
-                msg_lines.append(f"  ✓ {f}")
-
-            if failed_files:
-                msg_lines.append("")
-                msg_lines.append(f"未生成文件 ({len(failed_files)} 个):")
-                for f in failed_files:
-                    msg_lines.append(f"  ○ {f}")
-
-            msg_lines.append("")
+                if hasattr(self, 'archive_file_count'):
+                    msg_lines.append(f"归档文件数: {self.archive_file_count} 个")
             msg_lines.append(f"输出目录: {output_dir}")
 
             full_msg = "\n".join(msg_lines)

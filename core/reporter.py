@@ -156,8 +156,10 @@ class ReportGenerator:
                                      overdue_result: Dict, next_month_df: pd.DataFrame = None) -> pd.DataFrame:
         latest_visits = self._get_latest_visits(df)
 
+        columns = ['村居', '总人数', '有效记录数', '超期人数', '下月待随访人数', '异常记录数', '复核人', '复核日期', '备注']
+
         if latest_visits.empty:
-            return pd.DataFrame(columns=['村居', '总人数', '有效记录数', '超期人数', '下月待随访人数', '异常记录数'])
+            return pd.DataFrame(columns=columns)
 
         village_persons = latest_visits.groupby('村居')['身份证号'].nunique().reset_index()
         village_persons.columns = ['村居', '总人数']
@@ -203,6 +205,10 @@ class ReportGenerator:
             else:
                 review_df[col] = review_df[col].fillna(0).astype(int)
 
+        review_df['复核人'] = ''
+        review_df['复核日期'] = ''
+        review_df['备注'] = ''
+
         review_df = review_df.sort_values('总人数', ascending=False).reset_index(drop=True)
 
         total_row = pd.DataFrame([{
@@ -212,9 +218,14 @@ class ReportGenerator:
             '超期人数': review_df['超期人数'].sum(),
             '下月待随访人数': review_df['下月待随访人数'].sum(),
             '异常记录数': review_df['异常记录数'].sum(),
+            '复核人': '',
+            '复核日期': '',
+            '备注': '',
         }])
 
         review_df = pd.concat([review_df, total_row], ignore_index=True)
+
+        review_df = review_df[columns]
 
         return review_df
 
