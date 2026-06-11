@@ -63,7 +63,8 @@ class ReportGenerator:
 
     def generate_summary_report(self, df: pd.DataFrame, validation_result: Dict,
                                 overdue_result: Dict, merge_result: Dict,
-                                output_path: str, file_info_list: list = None) -> Dict:
+                                output_path: str, file_info_list: list = None,
+                                next_month_df: pd.DataFrame = None) -> Dict:
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -74,6 +75,11 @@ class ReportGenerator:
                 if file_info_list:
                     source_df = self._create_source_sheet(file_info_list)
                     source_df.to_excel(writer, index=False, sheet_name='导入来源')
+
+                village_review_df = self._create_village_review_sheet(
+                    df, validation_result, overdue_result, next_month_df
+                )
+                village_review_df.to_excel(writer, index=False, sheet_name='村居复核')
 
                 if validation_result.get('错误明细'):
                     error_df = pd.DataFrame(validation_result['错误明细'])
@@ -145,6 +151,72 @@ class ReportGenerator:
         })
 
         return pd.DataFrame(data)
+
+    def _create_village_review_sheet(self, df: pd.DataFrame, validation_result: Dict,
+                                     overdue_result: Dict, next_month_df: pd.DataFrame = None) -> pd.DataFrame:
+        latest_visits = self._get_latest_visits(df)
+
+        if latest_visits.empty:
+            return pd.DataFrame(columns=['村居', '总人数', '有效记录数', '超期人数', '下月待随访人数', '异常记录数'])
+
+        village_persons = latest_visits.groupby('村居')['身份证号'].nunique().reset_index()
+        village_persons.columns = ['村居', '总人数']
+
+        error_detail = validation_result.get('错误明细', [])
+        if error_detail:
+            error_df = pd.DataFrame(error_detail)
+            if '村居' in error_df.columns:
+                village_errors = error_df.groupby('村居').size().reset_index(name='异常记录数')
+            else:
+                village_errors = pd.DataFrame(columns=['村居', '异常记录数'])
+        else:
+            village_errors = pd.DataFrame(columns=['村居', '异常记录数'])
+
+        valid_records = validation_result.get('有效记录数', 0)
+        if valid_records > 0 and not latest_visits.empty:
+            village_valid = latest_visits.groupby('村居').size().reset_index(name='有效记录数')
+            village_valid['有效记录数'] = village_valid['有效记录数'].astype(int)
+        else:
+            village_valid = pd.DataFrame(columns=['村居', '有效记录数'])
+
+        overdue_df = overdue_result.get('超期人员', pd.DataFrame())
+        if not overdue_df.empty and '村居' in overdue_df.columns:
+            village_overdue = overdue_df.groupby('村居')['身份证号'].nunique().reset_index()
+            village_overdue.columns = ['村居', '超期人数']
+        else:
+            village_overdue = pd.DataFrame(columns=['村居', '超期人数'])
+
+        if next_month_df is not None and not next_month_df.empty and '村居' in next_month_df.columns:
+            village_next = next_month_df.groupby('村居')['身份证号'].nunique().reset_index()
+            village_next.columns = ['村居', '下月待随访人数']
+        else:
+            village_next = pd.DataFrame(columns=['村居', '下月待随访人数'])
+
+        review_df = village_persons
+        for other_df in [village_valid, village_overdue, village_next, village_errors]:
+            if not other_df.empty:
+                review_df = review_df.merge(other_df, on='村居', how='left')
+
+        for col in ['有效记录数', '超期人数', '下月待随访人数', '异常记录数']:
+            if col not in review_df.columns:
+                review_df[col] = 0
+            else:
+                review_df[col] = review_df[col].fillna(0).astype(int)
+
+        review_df = review_df.sort_values('总人数', ascending=False).reset_index(drop=True)
+
+        total_row = pd.DataFrame([{
+            '村居': '合计',
+            '总人数': review_df['总人数'].sum(),
+            '有效记录数': review_df['有效记录数'].sum(),
+            '超期人数': review_df['超期人数'].sum(),
+            '下月待随访人数': review_df['下月待随访人数'].sum(),
+            '异常记录数': review_df['异常记录数'].sum(),
+        }])
+
+        review_df = pd.concat([review_df, total_row], ignore_index=True)
+
+        return review_df
 
     def _get_latest_visits(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:

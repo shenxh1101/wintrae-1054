@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
+import shutil
 import pandas as pd
 from datetime import datetime
 
@@ -28,6 +29,8 @@ class MainWindow:
         self.export_result = None
         self.report_generated = False
         self.reminder_generated = False
+        self.archive_generated = False
+        self.archive_path = ''
 
         self._setup_ui()
         self._setup_styles()
@@ -124,6 +127,12 @@ class MainWindow:
         ttk.Button(all_btn_frame, text="一键执行全部操作", command=self.action_all,
                    style='Primary.TButton').pack(fill=tk.X)
 
+        archive_btn_frame = ttk.Frame(actions_frame)
+        archive_btn_frame.pack(fill=tk.X, pady=(8, 0))
+
+        ttk.Button(archive_btn_frame, text="生成月底归档包", command=self.action_archive,
+                   style='Action.TButton').pack(fill=tk.X)
+
     def _setup_log_section(self, parent):
         bottom_frame = ttk.Frame(parent)
         bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
@@ -158,6 +167,7 @@ class MainWindow:
             ('异常明细文件', '未生成', 'error_file'),
             ('汇总报告', '未生成', 'report_file'),
             ('下月提醒', '未生成', 'reminder_file'),
+            ('归档包', '未生成', 'archive_file'),
         ]
 
         for label, default, key in overview_items:
@@ -203,7 +213,20 @@ class MainWindow:
         self.export_result = None
         self.report_generated = False
         self.reminder_generated = False
+        self.archive_generated = False
+        self.archive_path = ''
         self.file_info_list = []
+
+    def _reset_import_state(self):
+        self.validation_result = None
+        self.deduped_data = None
+        self.overdue_result = None
+        self.next_month_result = None
+        self.export_result = None
+        self.report_generated = False
+        self.reminder_generated = False
+        self.archive_generated = False
+        self.archive_path = ''
 
     def _update_overview(self):
         category = self._get_category()
@@ -260,6 +283,11 @@ class MainWindow:
             vars_map['reminder_file'].set('已生成')
         else:
             vars_map['reminder_file'].set('未生成')
+
+        if self.archive_generated:
+            vars_map['archive_file'].set('已生成')
+        else:
+            vars_map['archive_file'].set('未生成')
 
     def _select_input_folder(self):
         folder = filedialog.askdirectory(title="选择数据文件夹")
@@ -331,6 +359,7 @@ class MainWindow:
                 messagebox.showwarning("提示", "数据文件夹中没有找到 Excel 或 CSV 文件")
             return False
 
+        self._reset_import_state()
         self._log("开始导入数据...")
         try:
             merger = DataMerger(self._get_category())
@@ -570,7 +599,8 @@ class MainWindow:
                 self.overdue_result,
                 merge_result,
                 report_path,
-                self.file_info_list
+                self.file_info_list,
+                self.next_month_result.get('下月待随访人员') if self.next_month_result else None
             )
 
             if result['成功']:
@@ -604,6 +634,111 @@ class MainWindow:
                 messagebox.showerror("错误", f"生成报告失败: {str(e)}")
             return False
 
+    def action_archive(self, silent=False):
+        output_dir = self._get_output_dir()
+        category = self._get_category()
+
+        if not self.report_generated:
+            if not silent:
+                messagebox.showwarning("提示", "请先生成汇总报告")
+            return False
+
+        self._log("开始生成月底归档包...")
+        try:
+            now = datetime.now()
+            archive_folder_name = f"{category}_{now.strftime('%Y%m')}月_归档"
+            archive_path = os.path.join(output_dir, archive_folder_name)
+
+            if os.path.exists(archive_path):
+                import shutil
+                shutil.rmtree(archive_path)
+            os.makedirs(archive_path, exist_ok=True)
+
+            file_list = []
+            success_count = 0
+            fail_count = 0
+
+            report_file = f"{category}_汇总报告.xlsx"
+            report_src = os.path.join(output_dir, report_file)
+            if os.path.exists(report_src):
+                shutil.copy2(report_src, os.path.join(archive_path, report_file))
+                file_list.append({'文件名': report_file, '类型': '汇总报告', '状态': '成功'})
+                success_count += 1
+            else:
+                file_list.append({'文件名': report_file, '类型': '汇总报告', '状态': '缺失'})
+                fail_count += 1
+
+            reminder_file = f"{category}_下月提醒.xlsx"
+            reminder_src = os.path.join(output_dir, reminder_file)
+            if os.path.exists(reminder_src):
+                shutil.copy2(reminder_src, os.path.join(archive_path, reminder_file))
+                file_list.append({'文件名': reminder_file, '类型': '下月提醒', '状态': '成功'})
+                success_count += 1
+            else:
+                file_list.append({'文件名': reminder_file, '类型': '下月提醒', '状态': '缺失'})
+                fail_count += 1
+
+            error_file = f"{category}_异常明细.xlsx"
+            error_src = os.path.join(output_dir, error_file)
+            if os.path.exists(error_src):
+                shutil.copy2(error_src, os.path.join(archive_path, error_file))
+                file_list.append({'文件名': error_file, '类型': '异常明细', '状态': '成功'})
+                success_count += 1
+            else:
+                file_list.append({'文件名': error_file, '类型': '异常明细', '状态': '未生成'})
+
+            village_dir_src = os.path.join(output_dir, '村居分组')
+            village_dir_dst = os.path.join(archive_path, '村居分组')
+            if os.path.exists(village_dir_src):
+                shutil.copytree(village_dir_src, village_dir_dst)
+                village_files = os.listdir(village_dir_src)
+                for vf in village_files:
+                    file_list.append({'文件名': f'村居分组/{vf}', '类型': '村居文件', '状态': '成功'})
+                success_count += len(village_files)
+            else:
+                file_list.append({'文件名': '村居分组/', '类型': '村居分组', '状态': '未生成'})
+
+            manifest_path = os.path.join(archive_path, '文件清单.txt')
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                f.write(f"{category} 随访资料归档清单\n")
+                f.write(f"归档时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"归档月份: {now.strftime('%Y年%m月')}\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"总文件数: {len(file_list)}\n")
+                f.write(f"成功: {success_count} 个\n")
+                f.write(f"异常: {fail_count} 个\n\n")
+                f.write("-" * 50 + "\n")
+                f.write(f"{'序号':<5}{'文件名':<35}{'类型':<12}{'状态':<10}\n")
+                f.write("-" * 50 + "\n")
+                for idx, item in enumerate(file_list, 1):
+                    f.write(f"{idx:<5}{item['文件名']:<35}{item['类型']:<12}{item['状态']:<10}\n")
+                f.write("\n")
+                f.write("=" * 50 + "\n")
+                f.write(f"归档路径: {archive_path}\n")
+
+            self.archive_generated = True
+            self.archive_path = archive_path
+
+            self._log(f"归档包已生成: {archive_path}")
+            self._log(f"  包含文件: {success_count} 个")
+            if fail_count > 0:
+                self._log(f"  缺失文件: {fail_count} 个")
+
+            if not silent:
+                msg = f"归档包已生成:\n{archive_path}\n\n"
+                msg += f"成功文件: {success_count} 个\n"
+                if fail_count > 0:
+                    msg += f"缺失文件: {fail_count} 个\n"
+                messagebox.showinfo("归档完成", msg)
+
+            self._update_overview()
+            return True
+        except Exception as e:
+            self._log(f"生成归档包失败: {str(e)}")
+            if not silent:
+                messagebox.showerror("错误", f"生成归档包失败: {str(e)}")
+            return False
+
     def action_all(self):
         self._log("=" * 50)
         self._log("开始执行全部操作...")
@@ -616,6 +751,7 @@ class MainWindow:
             ('生成提醒', 'remind'),
             ('分组导出', 'export'),
             ('汇总报告', 'report'),
+            ('生成归档包', 'archive'),
         ]
 
         step_results = {}
@@ -637,33 +773,54 @@ class MainWindow:
                     success = self.action_export(silent=True)
                 elif step_key == 'report':
                     success = self.action_report(silent=True)
+                elif step_key == 'archive':
+                    success = self.action_archive(silent=True)
             except Exception as e:
                 failed_message = str(e)
                 self._log(f"{step_name}异常: {str(e)}")
 
             step_results[step_key] = success
-            if not success:
+            if not success and step_key != 'archive':
                 failed_step = step_name
                 if not failed_message:
                     failed_message = f'{step_name}执行失败'
                 self._log(f"步骤失败: {step_name}，终止后续操作")
                 break
+            elif not success and step_key == 'archive':
+                self._log(f"归档包生成失败，不影响其他步骤")
 
         self._log("=" * 50)
         output_dir = self._get_output_dir()
 
         generated_files = []
+        failed_files = []
+
         if step_results.get('validate') and self.validation_result and self.validation_result.get('错误明细'):
             generated_files.append(f'{self._get_category()}_异常明细.xlsx')
+        else:
+            failed_files.append(f'{self._get_category()}_异常明细.xlsx')
+
         if step_results.get('export') and self.export_result:
             generated_files.append('村居分组/ (多个文件)')
             if self.overdue_result and not self.overdue_result.get('超期人员', pd.DataFrame()).empty:
                 generated_files.append('超期待访/ (多个文件)')
-        if step_results.get('report'):
-            if self.report_generated:
-                generated_files.append(f'{self._get_category()}_汇总报告.xlsx')
-            if self.reminder_generated:
-                generated_files.append(f'{self._get_category()}_下月提醒.xlsx')
+        else:
+            failed_files.append('村居分组/ (多个文件)')
+
+        if step_results.get('report') and self.report_generated:
+            generated_files.append(f'{self._get_category()}_汇总报告.xlsx')
+        else:
+            failed_files.append(f'{self._get_category()}_汇总报告.xlsx')
+
+        if step_results.get('report') and self.reminder_generated:
+            generated_files.append(f'{self._get_category()}_下月提醒.xlsx')
+        else:
+            failed_files.append(f'{self._get_category()}_下月提醒.xlsx')
+
+        if step_results.get('archive') and self.archive_generated:
+            generated_files.append('归档包/ (文件夹)')
+        else:
+            failed_files.append('归档包/ (文件夹)')
 
         if failed_step:
             self._log(f"执行失败，失败步骤: {failed_step}")
@@ -689,9 +846,15 @@ class MainWindow:
 
             if generated_files:
                 msg_lines.append("")
-                msg_lines.append("已生成的文件:")
+                msg_lines.append(f"已生成的文件 ({len(generated_files)} 个):")
                 for f in generated_files:
-                    msg_lines.append(f"  - {f}")
+                    msg_lines.append(f"  ✓ {f}")
+
+            if failed_files:
+                msg_lines.append("")
+                msg_lines.append(f"未生成的文件 ({len(failed_files)} 个):")
+                for f in failed_files:
+                    msg_lines.append(f"  ✗ {f}")
 
             msg_lines.append("")
             msg_lines.append(f"输出目录: {output_dir}")
@@ -701,6 +864,8 @@ class MainWindow:
         else:
             self._log("全部操作执行完成！")
             self._log(f"输出目录: {output_dir}")
+            if self.archive_generated:
+                self._log(f"归档包: {self.archive_path}")
             self._log("=" * 50)
 
             summary_lines = []
@@ -711,9 +876,29 @@ class MainWindow:
             if self.next_month_result:
                 summary_lines.append(f"下月待随访: {self.next_month_result['待随访人数']} 人")
 
-            summary_msg = "\n".join(summary_lines) if summary_lines else ""
-            full_msg = f"全部操作执行完成！\n\n{summary_msg}\n\n输出目录:\n{output_dir}"
+            msg_lines = ["全部操作执行完成！", ""]
+            if summary_lines:
+                msg_lines.extend(summary_lines)
+                msg_lines.append("")
 
+            msg_lines.append(f"生成文件数: {len(generated_files)} 个")
+            if self.archive_generated:
+                msg_lines.append(f"归档包位置: {self.archive_path}")
+            msg_lines.append("")
+            msg_lines.append("已生成文件:")
+            for f in generated_files:
+                msg_lines.append(f"  ✓ {f}")
+
+            if failed_files:
+                msg_lines.append("")
+                msg_lines.append(f"未生成文件 ({len(failed_files)} 个):")
+                for f in failed_files:
+                    msg_lines.append(f"  ○ {f}")
+
+            msg_lines.append("")
+            msg_lines.append(f"输出目录: {output_dir}")
+
+            full_msg = "\n".join(msg_lines)
             messagebox.showinfo("完成", full_msg)
 
     def run(self):
