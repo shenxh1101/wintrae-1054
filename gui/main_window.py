@@ -18,12 +18,16 @@ class MainWindow:
         self.input_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
         self.file_list = []
+        self.file_info_list = []
         self.current_data = None
         self.validation_result = None
         self.merged_data = None
         self.deduped_data = None
         self.overdue_result = None
         self.next_month_result = None
+        self.export_result = None
+        self.report_generated = False
+        self.reminder_generated = False
 
         self._setup_ui()
         self._setup_styles()
@@ -121,12 +125,60 @@ class MainWindow:
                    style='Primary.TButton').pack(fill=tk.X)
 
     def _setup_log_section(self, parent):
-        log_frame = ttk.LabelFrame(parent, text="操作日志", style='Section.TLabelframe', padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True)
+        bottom_frame = ttk.Frame(parent)
+        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+
+        log_frame = ttk.LabelFrame(bottom_frame, text="操作日志", style='Section.TLabelframe', padding="10")
+        log_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.log_text = scrolledtext.ScrolledText(log_frame, height=15, font=('Consolas', 9))
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self.log_text.config(state=tk.DISABLED)
+
+        overview_frame = ttk.LabelFrame(bottom_frame, text="当前分类概览", style='Section.TLabelframe', padding="10")
+        overview_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        overview_frame.configure(width=260)
+
+        self.overview_category_label = ttk.Label(overview_frame, text="慢病",
+                                                   font=('微软雅黑', 12, 'bold'), foreground='blue')
+        self.overview_category_label.pack(anchor=tk.W, pady=(0, 8))
+
+        info_frame = ttk.Frame(overview_frame)
+        info_frame.pack(fill=tk.X)
+
+        self.overview_vars = {}
+
+        overview_items = [
+            ('已导入文件', '-', 'file_count'),
+            ('总记录数', '-', 'total_records'),
+            ('数据有效率', '-', 'valid_rate'),
+            ('管理人数', '-', 'person_count'),
+            ('超期未访', '-', 'overdue_count'),
+            ('下月待随访', '-', 'next_month_count'),
+            ('异常明细文件', '未生成', 'error_file'),
+            ('汇总报告', '未生成', 'report_file'),
+            ('下月提醒', '未生成', 'reminder_file'),
+        ]
+
+        for label, default, key in overview_items:
+            row_frame = ttk.Frame(info_frame)
+            row_frame.pack(fill=tk.X, pady=2)
+
+            label_widget = ttk.Label(row_frame, text=label + ':', font=('微软雅黑', 9))
+            label_widget.pack(side=tk.LEFT)
+
+            value_var = tk.StringVar(value=default)
+            value_label = ttk.Label(row_frame, textvariable=value_var,
+                                     font=('微软雅黑', 9, 'bold'), foreground='darkgreen')
+            value_label.pack(side=tk.RIGHT)
+
+            self.overview_vars[key] = value_var
+
+        ttk.Separator(overview_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+
+        hint_label = ttk.Label(overview_frame, text="切换分类或重新导入时\n数据将自动刷新",
+                               foreground='gray', font=('微软雅黑', 8), justify=tk.CENTER)
+        hint_label.pack(anchor=tk.CENTER)
 
         self._log("系统就绪，请选择数据文件夹和人群分类")
 
@@ -134,9 +186,80 @@ class MainWindow:
         intervals = {'慢病': 90, '孕产妇': 30, '儿童': 90, '老年人': 180}
         category = self.current_category.get()
         self.interval_label.config(text=f"{intervals.get(category, 90)} 天")
-        self._log(f"已切换分类: {category}")
+        self.overview_category_label.config(text=category)
+        self._reset_category_state()
+        self._log(f"已切换到「{category}」分类工作台，数据已重置")
         if self.input_folder.get():
             self._scan_files()
+        self._update_overview()
+
+    def _reset_category_state(self):
+        self.current_data = None
+        self.validation_result = None
+        self.merged_data = None
+        self.deduped_data = None
+        self.overdue_result = None
+        self.next_month_result = None
+        self.export_result = None
+        self.report_generated = False
+        self.reminder_generated = False
+        self.file_info_list = []
+
+    def _update_overview(self):
+        category = self._get_category()
+        self.overview_category_label.config(text=category)
+
+        vars_map = self.overview_vars
+
+        vars_map['file_count'].set(str(len(self.file_list)) if self.file_list else '-')
+
+        if self.current_data is not None:
+            vars_map['total_records'].set(str(len(self.current_data)))
+        else:
+            vars_map['total_records'].set('-')
+
+        if self.validation_result:
+            vars_map['valid_rate'].set(self.validation_result.get('有效率', '-'))
+        else:
+            vars_map['valid_rate'].set('-')
+
+        if self.deduped_data is not None:
+            from core import DataMerger
+            merger = DataMerger(category)
+            person_result = merger.merge_by_person(self.deduped_data)
+            vars_map['person_count'].set(str(person_result['人数']))
+        elif self.current_data is not None:
+            from core import DataMerger
+            merger = DataMerger(category)
+            person_result = merger.merge_by_person(self.current_data)
+            vars_map['person_count'].set(str(person_result['人数']))
+        else:
+            vars_map['person_count'].set('-')
+
+        if self.overdue_result:
+            vars_map['overdue_count'].set(f"{self.overdue_result.get('超期人数', 0)} 人")
+        else:
+            vars_map['overdue_count'].set('-')
+
+        if self.next_month_result:
+            vars_map['next_month_count'].set(f"{self.next_month_result.get('待随访人数', 0)} 人")
+        else:
+            vars_map['next_month_count'].set('-')
+
+        if self.validation_result and self.validation_result.get('错误明细'):
+            vars_map['error_file'].set('已生成')
+        else:
+            vars_map['error_file'].set('未生成')
+
+        if self.report_generated:
+            vars_map['report_file'].set('已生成')
+        else:
+            vars_map['report_file'].set('未生成')
+
+        if self.reminder_generated:
+            vars_map['reminder_file'].set('已生成')
+        else:
+            vars_map['reminder_file'].set('未生成')
 
     def _select_input_folder(self):
         folder = filedialog.askdirectory(title="选择数据文件夹")
@@ -173,6 +296,8 @@ class MainWindow:
         for f in self.file_list:
             self._log(f"  - {os.path.basename(f)}")
 
+        self._update_overview()
+
     def _log(self, message):
         self.log_text.config(state=tk.NORMAL)
         timestamp = datetime.now().strftime('%H:%M:%S')
@@ -199,12 +324,12 @@ class MainWindow:
             else:
                 if not silent:
                     messagebox.showwarning("提示", "请先选择数据文件夹")
-                return
+                return False
 
         if not self.file_list:
             if not silent:
                 messagebox.showwarning("提示", "数据文件夹中没有找到 Excel 或 CSV 文件")
-            return
+            return False
 
         self._log("开始导入数据...")
         try:
@@ -212,6 +337,7 @@ class MainWindow:
             result = merger.merge_multiple_files(self.file_list)
             self.merged_data = result['合并数据']
             self.current_data = self.merged_data.copy()
+            self.file_info_list = result['文件信息']
 
             self._log(f"成功导入 {result['总记录数']} 条记录")
             for info in result['文件信息']:
@@ -220,16 +346,20 @@ class MainWindow:
 
             if not silent:
                 messagebox.showinfo("成功", f"成功导入 {result['总记录数']} 条记录")
+
+            self._update_overview()
+            return True
         except Exception as e:
             self._log(f"导入失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"导入失败: {str(e)}")
+            return False
 
     def action_validate(self, silent=False):
         if self.current_data is None:
             if not silent:
                 messagebox.showwarning("提示", "请先导入数据")
-            return
+            return False
 
         self._log("开始校验字段...")
         try:
@@ -266,16 +396,20 @@ class MainWindow:
                                     f"有效率: {self.validation_result['有效率']}\n"
                                     f"有效记录: {self.validation_result['有效记录数']} 条\n"
                                     f"无效记录: {self.validation_result['无效记录数']} 条")
+
+            self._update_overview()
+            return True
         except Exception as e:
             self._log(f"校验失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"校验失败: {str(e)}")
+            return False
 
     def action_merge(self, silent=False):
         if self.current_data is None:
             if not silent:
                 messagebox.showwarning("提示", "请先导入数据")
-            return
+            return False
 
         self._log("开始合并去重...")
         try:
@@ -300,16 +434,20 @@ class MainWindow:
                                     f"去除重复记录: {result['重复记录数']} 条\n"
                                     f"剩余记录: {result['去重后记录数']} 条\n"
                                     f"管理人数: {person_result['人数']} 人")
+
+            self._update_overview()
+            return True
         except Exception as e:
             self._log(f"合并失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"合并失败: {str(e)}")
+            return False
 
     def action_remind(self, silent=False):
         if self.current_data is None:
             if not silent:
                 messagebox.showwarning("提示", "请先导入数据")
-            return
+            return False
 
         self._log("开始生成提醒...")
         try:
@@ -322,6 +460,7 @@ class MainWindow:
                 )
 
             self.next_month_result = reminder.generate_next_month_reminder(self.current_data)
+            self.reminder_generated = True
 
             self._log(f"超期未访统计:")
             self._log(f"  管理总人数: {self.overdue_result['总人数']} 人")
@@ -340,16 +479,20 @@ class MainWindow:
                                     f"超期人数: {self.overdue_result['超期人数']} 人\n"
                                     f"超期率: {self.overdue_result['超期率']}\n"
                                     f"下月待随访: {self.next_month_result['待随访人数']} 人")
+
+            self._update_overview()
+            return True
         except Exception as e:
             self._log(f"生成提醒失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"生成提醒失败: {str(e)}")
+            return False
 
     def action_export(self, silent=False):
         if self.current_data is None:
             if not silent:
                 messagebox.showwarning("提示", "请先导入数据")
-            return
+            return False
 
         output_dir = self._get_output_dir()
         self._log("开始分组导出...")
@@ -358,6 +501,7 @@ class MainWindow:
 
             village_dir = os.path.join(output_dir, '村居分组')
             result = exporter.export_by_village(self.current_data, village_dir)
+            self.export_result = result
 
             if result['成功']:
                 self._log(f"成功导出 {len(result['文件列表'])} 个村居文件")
@@ -376,16 +520,20 @@ class MainWindow:
 
             if not silent:
                 messagebox.showinfo("导出完成", f"已导出到: {output_dir}")
+
+            self._update_overview()
+            return result['成功']
         except Exception as e:
             self._log(f"导出失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"导出失败: {str(e)}")
+            return False
 
     def action_report(self, silent=False):
         if self.current_data is None:
             if not silent:
                 messagebox.showwarning("提示", "请先导入数据")
-            return
+            return False
 
         output_dir = self._get_output_dir()
         self._log("开始生成汇总报告...")
@@ -414,17 +562,20 @@ class MainWindow:
 
             if self.next_month_result is None:
                 self.next_month_result = reminder.generate_next_month_reminder(self.current_data)
+                self.reminder_generated = True
 
             result = reporter.generate_summary_report(
                 self.current_data,
                 self.validation_result,
                 self.overdue_result,
                 merge_result,
-                report_path
+                report_path,
+                self.file_info_list
             )
 
             if result['成功']:
                 self._log(f"汇总报告已生成: {report_path}")
+                self.report_generated = True
             else:
                 self._log(f"生成报告失败: {result['消息']}")
 
@@ -438,51 +589,132 @@ class MainWindow:
                     self._log(f"下月提醒文件已生成（无待随访人员）: {reminder_path}")
                 else:
                     self._log(f"下月提醒文件已生成: {reminder_path}")
+                self.reminder_generated = True
 
             if not silent:
                 messagebox.showinfo("报告生成完成",
                                     f"汇总报告已保存到:\n{report_path}\n\n"
                                     f"下月提醒已保存到:\n{reminder_path}")
+
+            self._update_overview()
+            return result['成功']
         except Exception as e:
             self._log(f"生成报告失败: {str(e)}")
             if not silent:
                 messagebox.showerror("错误", f"生成报告失败: {str(e)}")
+            return False
 
     def action_all(self):
         self._log("=" * 50)
         self._log("开始执行全部操作...")
         self._log("=" * 50)
 
-        self.action_import(silent=True)
-        if self.current_data is None:
-            self._log("导入失败，终止执行")
-            messagebox.showerror("错误", "数据导入失败，请检查数据文件夹")
-            return
+        steps = [
+            ('导入名单', 'import'),
+            ('校验字段', 'validate'),
+            ('合并随访', 'merge'),
+            ('生成提醒', 'remind'),
+            ('分组导出', 'export'),
+            ('汇总报告', 'report'),
+        ]
 
-        self.action_validate(silent=True)
-        self.action_merge(silent=True)
-        self.action_remind(silent=True)
-        self.action_export(silent=True)
-        self.action_report(silent=True)
+        step_results = {}
+        failed_step = None
+        failed_message = ''
+
+        for step_name, step_key in steps:
+            success = False
+            try:
+                if step_key == 'import':
+                    success = self.action_import(silent=True)
+                elif step_key == 'validate':
+                    success = self.action_validate(silent=True)
+                elif step_key == 'merge':
+                    success = self.action_merge(silent=True)
+                elif step_key == 'remind':
+                    success = self.action_remind(silent=True)
+                elif step_key == 'export':
+                    success = self.action_export(silent=True)
+                elif step_key == 'report':
+                    success = self.action_report(silent=True)
+            except Exception as e:
+                failed_message = str(e)
+                self._log(f"{step_name}异常: {str(e)}")
+
+            step_results[step_key] = success
+            if not success:
+                failed_step = step_name
+                if not failed_message:
+                    failed_message = f'{step_name}执行失败'
+                self._log(f"步骤失败: {step_name}，终止后续操作")
+                break
 
         self._log("=" * 50)
-        self._log("全部操作执行完成！")
         output_dir = self._get_output_dir()
-        self._log(f"输出目录: {output_dir}")
-        self._log("=" * 50)
 
-        summary_lines = []
-        if self.validation_result:
-            summary_lines.append(f"数据有效率: {self.validation_result['有效率']}")
-        if self.overdue_result:
-            summary_lines.append(f"超期未访: {self.overdue_result['超期人数']} 人 ({self.overdue_result['超期率']})")
-        if self.next_month_result:
-            summary_lines.append(f"下月待随访: {self.next_month_result['待随访人数']} 人")
+        generated_files = []
+        if step_results.get('validate') and self.validation_result and self.validation_result.get('错误明细'):
+            generated_files.append(f'{self._get_category()}_异常明细.xlsx')
+        if step_results.get('export') and self.export_result:
+            generated_files.append('村居分组/ (多个文件)')
+            if self.overdue_result and not self.overdue_result.get('超期人员', pd.DataFrame()).empty:
+                generated_files.append('超期待访/ (多个文件)')
+        if step_results.get('report'):
+            if self.report_generated:
+                generated_files.append(f'{self._get_category()}_汇总报告.xlsx')
+            if self.reminder_generated:
+                generated_files.append(f'{self._get_category()}_下月提醒.xlsx')
 
-        summary_msg = "\n".join(summary_lines) if summary_lines else ""
-        full_msg = f"全部操作执行完成！\n\n{summary_msg}\n\n输出目录:\n{output_dir}"
+        if failed_step:
+            self._log(f"执行失败，失败步骤: {failed_step}")
+            self._log(f"输出目录: {output_dir}")
+            self._log("=" * 50)
 
-        messagebox.showinfo("完成", full_msg)
+            msg_lines = [
+                f"批量执行失败！",
+                f"",
+                f"失败步骤: {failed_step}",
+                f"错误信息: {failed_message}",
+                f"",
+                f"各步骤状态:",
+            ]
+            for step_name, step_key in steps:
+                if step_results.get(step_key):
+                    status = '✓ 成功'
+                elif step_key in step_results:
+                    status = '✗ 失败'
+                else:
+                    status = '○ 未执行'
+                msg_lines.append(f"  {status} - {step_name}")
+
+            if generated_files:
+                msg_lines.append("")
+                msg_lines.append("已生成的文件:")
+                for f in generated_files:
+                    msg_lines.append(f"  - {f}")
+
+            msg_lines.append("")
+            msg_lines.append(f"输出目录: {output_dir}")
+
+            full_msg = "\n".join(msg_lines)
+            messagebox.showerror("执行失败", full_msg)
+        else:
+            self._log("全部操作执行完成！")
+            self._log(f"输出目录: {output_dir}")
+            self._log("=" * 50)
+
+            summary_lines = []
+            if self.validation_result:
+                summary_lines.append(f"数据有效率: {self.validation_result['有效率']}")
+            if self.overdue_result:
+                summary_lines.append(f"超期未访: {self.overdue_result['超期人数']} 人 ({self.overdue_result['超期率']})")
+            if self.next_month_result:
+                summary_lines.append(f"下月待随访: {self.next_month_result['待随访人数']} 人")
+
+            summary_msg = "\n".join(summary_lines) if summary_lines else ""
+            full_msg = f"全部操作执行完成！\n\n{summary_msg}\n\n输出目录:\n{output_dir}"
+
+            messagebox.showinfo("完成", full_msg)
 
     def run(self):
         self.root.mainloop()

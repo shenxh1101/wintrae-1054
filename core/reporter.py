@@ -63,13 +63,17 @@ class ReportGenerator:
 
     def generate_summary_report(self, df: pd.DataFrame, validation_result: Dict,
                                 overdue_result: Dict, merge_result: Dict,
-                                output_path: str) -> Dict:
+                                output_path: str, file_info_list: list = None) -> Dict:
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
             with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
                 summary_df = self._create_summary_sheet(df, validation_result, overdue_result, merge_result)
                 summary_df.to_excel(writer, index=False, sheet_name='汇总概览')
+
+                if file_info_list:
+                    source_df = self._create_source_sheet(file_info_list)
+                    source_df.to_excel(writer, index=False, sheet_name='导入来源')
 
                 if validation_result.get('错误明细'):
                     error_df = pd.DataFrame(validation_result['错误明细'])
@@ -107,6 +111,40 @@ class ReportGenerator:
                 '消息': f'生成报告失败: {str(e)}',
                 '路径': output_path,
             }
+
+    def _create_source_sheet(self, file_info_list: list) -> pd.DataFrame:
+        data = []
+        for idx, info in enumerate(file_info_list, 1):
+            if '错误' in info:
+                status = '失败'
+                record_count = 0
+                error_msg = info['错误']
+            else:
+                status = '成功'
+                record_count = info['记录数']
+                error_msg = ''
+
+            data.append({
+                '序号': idx,
+                '文件名': info['文件名'],
+                '记录数': record_count,
+                '状态': status,
+                '错误信息': error_msg,
+            })
+
+        total_success = sum(1 for info in file_info_list if '错误' not in info)
+        total_fail = sum(1 for info in file_info_list if '错误' in info)
+        total_records = sum(info.get('记录数', 0) for info in file_info_list)
+
+        data.append({
+            '序号': '',
+            '文件名': '合计',
+            '记录数': total_records,
+            '状态': f'成功 {total_success} 个，失败 {total_fail} 个',
+            '错误信息': '',
+        })
+
+        return pd.DataFrame(data)
 
     def _get_latest_visits(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
