@@ -77,9 +77,13 @@ class ReminderGenerator:
 
         latest_df = self.get_latest_followup(df)
 
+        empty_columns = ['姓名', '身份证号', '联系电话', '村居', '随访日期', '随访结果', '下次随访日期']
+        if '来源文件' in df.columns:
+            empty_columns.append('来源文件')
+
         if latest_df.empty:
             return {
-                '下月待随访人员': pd.DataFrame(),
+                '下月待随访人员': pd.DataFrame(columns=empty_columns),
                 '待随访人数': 0,
                 '总人数': 0,
                 '参考日期': reference_date.strftime('%Y-%m-%d'),
@@ -99,6 +103,9 @@ class ReminderGenerator:
         due_next_month['下次随访日期'] = due_next_month['下次随访日期'].dt.strftime('%Y-%m-%d')
 
         due_next_month = due_next_month.sort_values('下次随访日期')
+
+        if due_next_month.empty:
+            due_next_month = pd.DataFrame(columns=empty_columns)
 
         return {
             '下月待随访人员': due_next_month,
